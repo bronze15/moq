@@ -147,6 +147,35 @@ TS export carries H.264 / H.265 as Annex-B and AAC as ADTS. Both in-band
 sources work: the parameter sets are read from the bitstream or the catalog
 `description` and re-injected as Annex-B on each keyframe.
 
+## Recording to HLS
+
+`subscribe --record <dir>` saves the broadcast to disk as HLS / fMP4 (CMAF)
+instead of writing to stdout. It writes an `init.mp4`, numbered
+`seg_NNNNN.m4s` segments, and an `index.m3u8` playlist:
+
+```bash
+moq-cli subscribe --url https://relay.example.com --broadcast my-stream \
+    --record ./recordings/my-stream --chunk-duration 6s
+```
+
+```bash
+# Play the recording back (segments are independently decodable):
+ffplay ./recordings/my-stream/index.m3u8
+vlc ./recordings/my-stream/index.m3u8
+```
+
+Video and audio are muxed into the same segments. Each segment is cut at the
+first keyframe at or after `--chunk-duration` of media time (default `30s`), so
+every segment starts on a keyframe and plays on its own, and `#EXTINF`
+durations track real media time rather than a fragment count. The playlist is
+rewritten after every segment (so a partial recording stays playable) and
+finalized to a VOD playlist with `#EXT-X-ENDLIST` when the broadcast ends.
+
+`--record` always produces fMP4 HLS, so `--format` and `--fragment-duration`
+are ignored when it is set. Short segments upload to object storage faster and
+let players start sooner, which is convenient for archiving or serving
+on-demand.
+
 ## Authentication
 
 Pass a JWT token via the URL:

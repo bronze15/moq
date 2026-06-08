@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::Context;
 use clap::ValueEnum;
 use hang::moq_net;
 use moq_mux::catalog::CatalogFormat;
+use moq_mux::container::hls;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -43,13 +45,21 @@ pub struct SubscribeArgs {
 	#[arg(long)]
 	pub catalog: Option<CatalogFormatArg>,
 
-	/// Directory to save recorded chunks to disk.
+	/// Record to an HLS / fMP4 directory instead of writing to stdout.
+	///
+	/// Writes `init.mp4`, `seg_NNNNN.m4s` segments, and an `index.m3u8` VOD
+	/// playlist that plays directly in ffmpeg, VLC, Safari and hls.js. Video
+	/// and audio are muxed together. Implies fMP4 output, so `--format` and
+	/// `--fragment-duration` are ignored.
 	/// Example: --record ./recordings/my-stream
 	#[arg(long)]
 	pub record: Option<PathBuf>,
 
-	/// Duration of each recorded chunk. Defaults to 30s.
-	/// Only used when --record is set.
+	/// Target duration of each recorded segment (e.g. `6s`, `30s`).
+	///
+	/// Segments are cut at the first keyframe at or after this much media time,
+	/// so each one starts on a keyframe and plays on its own. Only used with
+	/// `--record`. Defaults to 30s.
 	#[arg(long, default_value = "30s", value_parser = humantime::parse_duration)]
 	pub chunk_duration: Duration,
 }
@@ -80,11 +90,7 @@ impl Subscribe {
 
 	pub async fn run(self) -> anyhow::Result<()> {
 		if let Some(record_dir) = self.args.record.clone() {
-			return match self.args.format {
-				SubscribeFormat::Fmp4 => self.run_fmp4_record(record_dir).await,
-				SubscribeFormat::Ts => self.run_ts_record(record_dir).await,
-				_ => anyhow::bail!("--record only supports --format fmp4 or ts"),
-			};
+			return self.run_hls_record(record_dir).await;
 		}
 
 		match self.args.format {
@@ -129,78 +135,49 @@ impl Subscribe {
 		Ok(())
 	}
 
-	async fn run_fmp4_record(self, record_dir: PathBuf) -> anyhow::Result<()> {
+	/// Record the broadcast as an HLS / fMP4 directory: `init.mp4`, numbered
+	/// `seg_NNNNN.m4s` segments, and a rolling `index.m3u8` playlist (finalized
+	/// to VOD on exit). The playlist is rewritten after every segment so a
+	/// partial recording stays playable.
+	async fn run_hls_record(self, record_dir: PathBuf) -> anyhow::Result<()> {
 		fs::create_dir_all(&record_dir).await?;
 
-		let chunk_duration_secs = self.args.chunk_duration.as_secs_f64();
-		let fragment_secs = self
-			.args
-			.fragment_duration
-			.unwrap_or(Duration::from_millis(500))
-			.as_secs_f64();
-
-		let mut chunk_index: u32 = 0;
-		let mut elapsed_secs: f64 = 0.0;
-
-		let chunk_path = record_dir.join(format!("chunk_{:03}.mp4", chunk_index));
-		eprintln!("[record] Starting chunk {} -> {:?}", chunk_index, chunk_path);
-		let mut current_file = fs::File::create(&chunk_path).await?;
-
-		let mut fmp4 = moq_mux::container::fmp4::Export::with_catalog_format(self.broadcast, self.catalog)?
+		let mut export = hls::Export::with_catalog_format(self.broadcast, self.catalog)?
 			.with_latency(self.args.max_latency)
-			.with_fragment_duration(self.args.fragment_duration);
+			.with_segment_duration(self.args.chunk_duration);
 
-		while let Some(chunk) = fmp4.next().await? {
-			current_file.write_all(&chunk).await?;
-			elapsed_secs += fragment_secs;
+		const INIT_NAME: &str = "init.mp4";
+		let playlist_path = record_dir.join("index.m3u8");
+		let mut playlist: Option<hls::Playlist> = None;
 
-			if elapsed_secs >= chunk_duration_secs {
-				current_file.flush().await?;
-				elapsed_secs = 0.0;
-				chunk_index += 1;
-				let new_path = record_dir.join(format!("chunk_{:03}.mp4", chunk_index));
-				eprintln!("[record] Rotating to chunk {} -> {:?}", chunk_index, new_path);
-				current_file = fs::File::create(&new_path).await?;
+		while let Some(segment) = export.next().await? {
+			match segment {
+				hls::Segment::Init(data) => {
+					fs::write(record_dir.join(INIT_NAME), &data).await?;
+					playlist = Some(hls::Playlist::new(INIT_NAME));
+					eprintln!("[record] wrote {} ({} bytes)", INIT_NAME, data.len());
+				}
+				hls::Segment::Media {
+					data,
+					duration,
+					sequence,
+				} => {
+					let name = format!("seg_{:05}.m4s", sequence);
+					fs::write(record_dir.join(&name), &data).await?;
+
+					let playlist = playlist.as_mut().context("media segment arrived before init segment")?;
+					playlist.push(name.clone(), duration);
+					fs::write(&playlist_path, playlist.render(false)).await?;
+
+					eprintln!("[record] wrote {} ({:.2}s)", name, duration.as_secs_f64());
+				}
 			}
 		}
 
-		current_file.flush().await?;
-		eprintln!("[record] Done. {} chunks saved in {:?}", chunk_index + 1, record_dir);
-		Ok(())
-	}
-
-	async fn run_ts_record(self, record_dir: PathBuf) -> anyhow::Result<()> {
-		fs::create_dir_all(&record_dir).await?;
-
-		let chunk_duration_secs = self.args.chunk_duration.as_secs_f64();
-		let fragment_secs = 0.5_f64;
-
-		let mut chunk_index: u32 = 0;
-		let mut elapsed_secs: f64 = 0.0;
-
-		let chunk_path = record_dir.join(format!("chunk_{:03}.ts", chunk_index));
-		eprintln!("[record] Starting chunk {} -> {:?}", chunk_index, chunk_path);
-		let mut current_file = fs::File::create(&chunk_path).await?;
-
-		let mut ts = moq_mux::container::ts::Export::with_catalog_format(self.broadcast, self.catalog)?
-			.with_latency(self.args.max_latency);
-
-		while let Some(chunk) = ts.next().await? {
-			current_file.write_all(&chunk).await?;
-			elapsed_secs += fragment_secs;
-
-			if elapsed_secs >= chunk_duration_secs {
-				current_file.flush().await?;
-				elapsed_secs = 0.0;
-				chunk_index += 1;
-				let new_path = record_dir.join(format!("chunk_{:03}.ts", chunk_index));
-				eprintln!("[record] Rotating to chunk {} -> {:?}", chunk_index, new_path);
-				current_file = fs::File::create(&new_path).await?;
-			}
+		if let Some(playlist) = playlist.as_ref() {
+			fs::write(&playlist_path, playlist.render(true)).await?;
 		}
-
-		current_file.flush().await?;
-		eprintln!("[record] Done. {} chunks saved in {:?}", chunk_index + 1, record_dir);
+		eprintln!("[record] done -> {}", record_dir.display());
 		Ok(())
 	}
 }

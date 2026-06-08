@@ -8,9 +8,34 @@ use hang::catalog::{Catalog, Container, VideoConfig};
 use mp4_atom::{DecodeMaybe, Encode};
 
 use crate::catalog::CatalogFormat;
-use crate::container::Frame;
+use crate::container::{CatalogSource, ExportSource, Frame, Timestamp};
 
-use crate::container::{CatalogSource, ExportSource};
+/// One output unit from [`Export::poll_emit`]: the leading init segment, or a
+/// single moof+mdat fragment tagged with the timing the HLS segmenter needs.
+///
+/// Crate-internal: the public [`Export::next`] API stays byte-oriented and just
+/// drops the metadata.
+pub(crate) enum Emit {
+	/// ftyp + multi-track moov. Emitted once, first.
+	Init(Bytes),
+	/// One moof+mdat fragment.
+	Fragment {
+		data: Bytes,
+		/// Presentation timestamp of the fragment's first frame.
+		timestamp: Timestamp,
+		/// True when the fragment opens on a video keyframe (a valid segment boundary).
+		keyframe: bool,
+	},
+}
+
+impl Emit {
+	fn into_bytes(self) -> Bytes {
+		match self {
+			Emit::Init(data) => data,
+			Emit::Fragment { data, .. } => data,
+		}
+	}
+}
 
 /// Subscribe to a moq broadcast and produce a single fMP4 / CMAF byte stream.
 ///
@@ -134,6 +159,17 @@ impl Export {
 
 	/// Poll-based variant of [`Self::next`].
 	pub fn poll_next(&mut self, waiter: &kio::Waiter) -> Poll<anyhow::Result<Option<Bytes>>> {
+		let emit = std::task::ready!(self.poll_emit(waiter))?;
+		Poll::Ready(Ok(emit.map(Emit::into_bytes)))
+	}
+
+	/// Like [`Self::next`] but tags each fragment with the timing metadata the
+	/// HLS segmenter needs. Crate-internal; the public API stays byte-oriented.
+	pub(crate) async fn emit(&mut self) -> anyhow::Result<Option<Emit>> {
+		kio::wait(|waiter| self.poll_emit(waiter)).await
+	}
+
+	pub(crate) fn poll_emit(&mut self, waiter: &kio::Waiter) -> Poll<anyhow::Result<Option<Emit>>> {
 		// 1. Drain catalog updates and (un)subscribe tracks accordingly.
 		while let Some(catalog) = self.catalog.as_mut() {
 			match catalog.poll_next(waiter)? {
@@ -184,7 +220,7 @@ impl Export {
 			if self.init_ready() {
 				let init = self.build_init()?;
 				self.init_emitted = true;
-				return Poll::Ready(Ok(Some(init)));
+				return Poll::Ready(Ok(Some(Emit::Init(init))));
 			}
 			// Still waiting for codec configs. If every track is finished and
 			// the init still isn't buildable, the source ended before producing
@@ -212,13 +248,19 @@ impl Export {
 			let flush_before = should_flush(track, &frame, frag, has_video_track);
 			if flush_before {
 				let frames = std::mem::take(&mut track.buffer);
-				let emit = encode_fragment(track, frames)?;
+				let timestamp = frames[0].timestamp;
+				let keyframe = track.is_video && frames[0].keyframe;
+				let data = encode_fragment(track, frames)?;
 				track.buffer.push(frame);
-				return Poll::Ready(Ok(Some(emit)));
+				return Poll::Ready(Ok(Some(Emit::Fragment {
+					data,
+					timestamp,
+					keyframe,
+				})));
 			}
 			track.buffer.push(frame);
 			// Frame appended to buffer; loop again to look for more work or a flush.
-			return self.poll_next(waiter);
+			return self.poll_emit(waiter);
 		}
 
 		// 5. No pending frames. Flush any finished tracks' remaining buffers,
@@ -239,8 +281,14 @@ impl Export {
 		if let Some(name) = flushable {
 			let track = self.tracks.get_mut(&name).unwrap();
 			let frames = std::mem::take(&mut track.buffer);
-			let emit = encode_fragment(track, frames)?;
-			return Poll::Ready(Ok(Some(emit)));
+			let timestamp = frames[0].timestamp;
+			let keyframe = track.is_video && frames[0].keyframe;
+			let data = encode_fragment(track, frames)?;
+			return Poll::Ready(Ok(Some(Emit::Fragment {
+				data,
+				timestamp,
+				keyframe,
+			})));
 		}
 
 		// 6. If catalog is closed and every track is finished and drained, we're done.
