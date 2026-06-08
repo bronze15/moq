@@ -1,0 +1,22 @@
+[Unit]
+Description=MoQ RTMP ingest (MediaMTX recording + MoQ live bridge)
+Documentation=https://github.com/moq-dev/moq
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Path to the cloned repo's deploy/rtmp directory.
+WorkingDirectory=/opt/moq/deploy/rtmp
+# Build once on (re)start, then run in the foreground so logs reach journald.
+ExecStartPre=/usr/bin/docker compose build
+ExecStart=/usr/bin/docker compose up --remove-orphans
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=5
+# Building the image can take a while on first start.
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

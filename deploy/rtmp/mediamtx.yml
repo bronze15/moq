@@ -27,6 +27,31 @@ api: yes
 apiAddress: :9997
 
 ###############################################################################
+# Authentication
+###############################################################################
+# Every RTMP publish is validated against your backend: the stream key is the
+# path, so a broadcaster connects to rtmp://<host>:1935/<stream-key> and
+# MediaMTX POSTs that key to your auth endpoint, which approves or rejects it.
+#
+# Set the endpoint via the RTMP_AUTH_URL env var (compose maps it to
+# MTX_AUTHHTTPADDRESS). The backend receives a JSON body:
+#   { "user": "", "password": "", "ip": "1.2.3.4", "action": "publish",
+#     "path": "<stream-key>", "protocol": "rtmp", "id": "...", "query": "..." }
+# and returns 2xx to allow or 401/403 to deny.
+#
+# For local testing without a backend, start with MTX_AUTHMETHOD=internal to
+# allow any key (see README).
+authMethod: http
+authHTTPAddress: http://set-RTMP_AUTH_URL.invalid/auth
+# The internal MoQ bridge reads each stream over localhost RTSP; don't bounce
+# those internal reads (or the API/metrics) off your backend.
+authHTTPExclude:
+  - action: read
+  - action: api
+  - action: metrics
+  - action: pprof
+
+###############################################################################
 # Per-stream behavior (applies to every published stream)
 ###############################################################################
 

@@ -9,10 +9,15 @@ services:
     restart: unless-stopped
     ports:
       - "1935:1935" # RTMP publish endpoint (OBS / phones / ffmpeg)
-      - "9997:9997" # HTTP API (lock down or drop in production)
+      # API (:9997) and RTSP (:8554) stay internal on purpose; don't publish them.
     environment:
       # Your MoQ relay. The bridge publishes each stream here as "<stream-key>.hang".
       MOQ_URL: ${MOQ_URL:-http://host.docker.internal:4443/anon}
+      # Your RTMP auth backend (validates the stream key on publish). Overrides
+      # authHTTPAddress in mediamtx.yml. For local testing without a backend,
+      # set MTX_AUTHMETHOD=internal instead (allows any key).
+      MTX_AUTHHTTPADDRESS: ${RTMP_AUTH_URL:-http://set-RTMP_AUTH_URL.invalid/auth}
+      MTX_AUTHMETHOD: ${RTMP_AUTH_METHOD:-http}
     volumes:
       - ./recordings:/recordings
     extra_hosts:
