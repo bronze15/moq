@@ -135,49 +135,77 @@ impl Subscribe {
 		Ok(())
 	}
 
-	/// Record the broadcast as an HLS / fMP4 directory: `init.mp4`, numbered
-	/// `seg_NNNNN.m4s` segments, and a rolling `index.m3u8` playlist (finalized
-	/// to VOD on exit). The playlist is rewritten after every segment so a
-	/// partial recording stays playable.
 	async fn run_hls_record(self, record_dir: PathBuf) -> anyhow::Result<()> {
-		fs::create_dir_all(&record_dir).await?;
-
-		let mut export = hls::Export::with_catalog_format(self.broadcast, self.catalog)?
+		let export = hls::Export::with_catalog_format(self.broadcast, self.catalog)?
 			.with_latency(self.args.max_latency)
 			.with_segment_duration(self.args.chunk_duration);
+		// Idle backstop, well above a normal segment interval.
+		record_hls(export, record_dir, Duration::from_secs(30)).await
+	}
+}
 
-		const INIT_NAME: &str = "init.mp4";
-		let playlist_path = record_dir.join("index.m3u8");
-		let mut playlist: Option<hls::Playlist> = None;
+/// Drive an HLS export to disk: an `init.mp4`, numbered `seg_NNNNN.m4s`
+/// segments, and an `index.m3u8` rewritten after each segment and finalized to a
+/// VOD playlist (`#EXT-X-ENDLIST`) once recording stops. Shared by both
+/// `subscribe --record` and the `record` auto-recorder.
+///
+/// Recording stops and finalizes when the broadcast ends cleanly (`None`), when
+/// the publisher disconnects (error), or when no media arrives for
+/// `idle_timeout` (a backstop for a relay that never signals the end). So the
+/// playlist always gets its `#EXT-X-ENDLIST` rather than hanging open.
+pub async fn record_hls(mut export: hls::Export, record_dir: PathBuf, idle_timeout: Duration) -> anyhow::Result<()> {
+	fs::create_dir_all(&record_dir).await?;
 
-		while let Some(segment) = export.next().await? {
-			match segment {
-				hls::Segment::Init(data) => {
-					fs::write(record_dir.join(INIT_NAME), &data).await?;
-					playlist = Some(hls::Playlist::new(INIT_NAME));
-					eprintln!("[record] wrote {} ({} bytes)", INIT_NAME, data.len());
-				}
-				hls::Segment::Media {
-					data,
-					duration,
-					sequence,
-				} => {
-					let name = format!("seg_{:05}.m4s", sequence);
-					fs::write(record_dir.join(&name), &data).await?;
+	const INIT_NAME: &str = "init.mp4";
+	let playlist_path = record_dir.join("index.m3u8");
+	let mut playlist: Option<hls::Playlist> = None;
 
-					let playlist = playlist.as_mut().context("media segment arrived before init segment")?;
-					playlist.push(name.clone(), duration);
-					fs::write(&playlist_path, playlist.render(false)).await?;
+	loop {
+		let segment = match tokio::time::timeout(idle_timeout, export.next()).await {
+			Ok(Ok(Some(segment))) => segment,
+			Ok(Ok(None)) => break, // clean end of broadcast
+			Ok(Err(err)) => {
+				// Publisher disconnected (or a stream error): finalize what we have.
+				tracing::warn!(%err, dir = %record_dir.display(), "recording stopped (broadcast ended)");
+				break;
+			}
+			Err(_) => {
+				tracing::warn!(dir = %record_dir.display(), "no media for {idle_timeout:?}, finalizing recording");
+				break;
+			}
+		};
 
-					eprintln!("[record] wrote {} ({:.2}s)", name, duration.as_secs_f64());
-				}
+		match segment {
+			hls::Segment::Init(data) => {
+				fs::write(record_dir.join(INIT_NAME), &data).await?;
+				playlist = Some(hls::Playlist::new(INIT_NAME));
+				eprintln!("[record] {} init ({} bytes)", record_dir.display(), data.len());
+			}
+			hls::Segment::Media {
+				data,
+				duration,
+				sequence,
+			} => {
+				let name = format!("seg_{:05}.m4s", sequence);
+				fs::write(record_dir.join(&name), &data).await?;
+
+				let playlist = playlist.as_mut().context("media segment arrived before init segment")?;
+				playlist.push(name.clone(), duration);
+				fs::write(&playlist_path, playlist.render(false)).await?;
+
+				eprintln!(
+					"[record] {} {} ({:.2}s)",
+					record_dir.display(),
+					name,
+					duration.as_secs_f64()
+				);
 			}
 		}
-
-		if let Some(playlist) = playlist.as_ref() {
-			fs::write(&playlist_path, playlist.render(true)).await?;
-		}
-		eprintln!("[record] done -> {}", record_dir.display());
-		Ok(())
 	}
+
+	if let Some(playlist) = playlist.as_ref() {
+		fs::write(&playlist_path, playlist.render(true)).await?;
+	}
+	eprintln!("[record] done -> {}", record_dir.display());
+	Ok(())
 }
