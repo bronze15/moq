@@ -32,12 +32,29 @@ mod web 'demo/web'
 default:
     just demo
 
-# Start the live platform locally: a MoQ relay + the auto-recorder (every live broadcast is recorded to ./recordings/<name>/).
+# Start the live platform locally: MoQ relay + auto-recorder + RTMP ingest (OBS -> rtmp://localhost:1935/live/stream).
 live:
     bun install
-    bun run concurrently --kill-others --names relay,record --prefix-colors auto \
+    bun run concurrently --kill-others --names relay,record,rtmp --prefix-colors auto \
     	"just relay" \
-    	"cargo run --quiet -p moq-cli -- record --url http://localhost:4443/anon --dir ./recordings"
+    	"cargo run --quiet -p moq-cli -- record --url http://localhost:4443/anon --dir ./recordings" \
+    	"just rtmp"
+
+# Accept an RTMP publisher (OBS -> rtmp://localhost:1935/live/stream) and bridge
+# it into MoQ as broadcast `obs.hang`. MoQ doesn't speak RTMP; ffmpeg listens for
+# the RTMP push and pipes it to `moq-cli publish`. Loops so OBS can reconnect.
+rtmp broadcast="obs.hang":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    while true; do
+    	echo "[rtmp] waiting for an RTMP publisher on rtmp://localhost:1935/live/stream ..."
+    	ffmpeg -hide_banner -loglevel warning -listen 1 -i rtmp://localhost:1935/live/stream \
+    		-c:v libx264 -preset ultrafast -tune zerolatency -g 30 -c:a aac \
+    		-f mp4 -movflags frag_keyframe+empty_moov+default_base_moof - \
+    		| cargo run --quiet -p moq-cli -- publish --url http://localhost:4443/anon --name {{ broadcast }} fmp4 || true
+    	echo "[rtmp] publisher disconnected; waiting for the next one..."
+    	sleep 1
+    done
 
 # Alias for `just demo`.
 dev:
