@@ -32,13 +32,15 @@ mod web 'demo/web'
 default:
     just demo
 
-# Start the live platform locally: MoQ relay + auto-recorder + RTMP ingest (OBS -> rtmp://localhost:1935/live/stream).
+# Start the live platform locally: relay + auto-recorder + RTMP ingest + web player.
+# Watch at http://localhost:5173/?broadcast=obs.hang (or any broadcast name).
 live:
     bun install
-    bun run concurrently --kill-others --names relay,record,rtmp --prefix-colors auto \
+    bun run concurrently --kill-others --names relay,record,rtmp,web --prefix-colors auto \
     	"just relay" \
     	"cargo run --quiet -p moq-cli -- record --url http://localhost:4443/anon --dir ./recordings" \
-    	"just rtmp"
+    	"just rtmp" \
+    	"just web"
 
 # Accept an RTMP publisher (OBS -> rtmp://localhost:1935/live/stream) and bridge
 # it into MoQ as broadcast `obs.hang`. MoQ doesn't speak RTMP; ffmpeg listens for
