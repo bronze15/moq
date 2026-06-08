@@ -68,17 +68,65 @@ ffmpeg -re -i input.mp4 -c:v libx264 -c:a aac -f flv rtmp://<host>:1935/ana
 - **Live (MoQ):** broadcast `<stream-key>.hang` on your relay — watch with
   `@moq/watch`, `moq-cli subscribe`, etc.
 
+## Authentication (stream key validated by your backend)
+
+Publishing is authenticated by default. The **stream key is the path**, so a
+broadcaster connects to `rtmp://<host>:1935/<stream-key>` and MediaMTX asks your
+backend whether that key may publish.
+
+Set `RTMP_AUTH_URL` in `.env` to your endpoint. On each publish, MediaMTX sends
+it a `POST` with JSON:
+
+```json
+{
+  "user": "",
+  "password": "",
+  "ip": "203.0.113.7",
+  "action": "publish",
+  "path": "ana",
+  "protocol": "rtmp",
+  "id": "...",
+  "query": ""
+}
+```
+
+Your backend returns **2xx to allow**, **401/403 to deny**. Validate `path`
+(the stream key / token) against the broadcaster it belongs to. Internal RTSP
+reads (the MoQ bridge) and the API/metrics are excluded from auth, so they don't
+hit your backend.
+
+**Local testing without a backend:** set `RTMP_AUTH_METHOD=internal` in `.env`
+to allow any key, then switch back to `http` for production.
+
+## Auto-start on boot (systemd)
+
+```bash
+# Clone the repo to a stable path and configure:
+sudo git clone https://github.com/<you>/moq.git /opt/moq
+cd /opt/moq/deploy/rtmp
+sudo cp .env.example .env && sudoedit .env        # set MOQ_URL + RTMP_AUTH_URL
+
+# Install and enable the service:
+sudo cp systemd/moq-rtmp-ingest.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now moq-rtmp-ingest
+sudo journalctl -u moq-rtmp-ingest -f
+```
+
+The unit builds the image on first start (compiles `moq-cli` once), runs the
+stack in the foreground so logs reach `journalctl`, restarts on failure, and
+tears the stack down on stop. Edit `WorkingDirectory` if you cloned elsewhere.
+For the MinIO sidecar, add `--profile minio` to the `ExecStart` compose line.
+
 ## Production notes
 
-- **Auth:** MediaMTX accepts any stream key by default. Add authentication
-  (`authInternalUsers`, or an external `authHTTPAddress` hook that validates the
-  key against your backend) before exposing `:1935`. Lock down or drop the API
-  port `:9997`.
 - **Scale:** run multiple ingest nodes behind your stream-key router; MediaMTX is
   stateless per stream. Recordings can write straight to a mounted object-store
   gateway, or use the MinIO sync sidecar.
 - **Transcode/ABR:** add ffmpeg renditions in `runOnReady` if you need multiple
   qualities; `-c copy` (default here) is passthrough only.
+- **Ports:** expose `:1935` (RTMP) to broadcasters; keep the API `:9997` and RTSP
+  `:8554` internal (the Compose file does not publish them).
 - **MediaMTX version:** pinned via `MEDIAMTX_VERSION` in the Dockerfile; bump as
   needed.
 
