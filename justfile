@@ -32,6 +32,13 @@ mod web 'demo/web'
 default:
     just demo
 
+# Start the live platform locally: a MoQ relay + the auto-recorder (every live broadcast is recorded to ./recordings/<name>/).
+live:
+    bun install
+    bun run concurrently --kill-others --names relay,record --prefix-colors auto \
+    	"just relay" \
+    	"cargo run --quiet -p moq-cli -- record --url http://localhost:4443/anon --dir ./recordings"
+
 # Alias for `just demo`.
 dev:
     just demo

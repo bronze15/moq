@@ -49,3 +49,6 @@ __pycache__/
 # maturin develop drops uniffi bindings + cdylib here during editable
 # installs of the py/moq-ffi package.
 /py/moq-ffi/moq_ffi/_uniffi/
+
+# Local recordings from `just live` / moq-cli record
+/recordings/
