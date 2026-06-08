@@ -35,16 +35,30 @@ large platform, ingest-side recording is the robust, low-surprise choice.
 
 ## Run
 
+Start the whole local platform (MoQ relay + this ingest stack) with one command:
+
+```bash
+just live
+```
+
+Or just the ingest stack:
+
+```bash
+just ingest up            # build + run (local dev: auth open)
+just ingest up-minio      # also mirror recordings to MinIO
+just ingest down          # stop
+just ingest logs          # follow logs
+```
+
+`just ingest up` runs with auth disabled for convenience. For production use the
+systemd unit with an `.env` (see below), which keeps `RTMP_AUTH_METHOD=http`.
+
+Plain Docker Compose works too:
+
 ```bash
 cd deploy/rtmp
 cp .env.example .env          # set MOQ_URL (and MinIO vars if you use it)
 docker compose up --build     # builds the image (compiles moq-cli once) and starts
-```
-
-With MinIO mirroring:
-
-```bash
-docker compose --profile minio up --build
 ```
 
 ## Point a broadcaster at it

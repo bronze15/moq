@@ -28,9 +28,19 @@ mod relay 'demo/relay'
 mod sub 'demo/sub'
 mod web 'demo/web'
 
+# RTMP ingest stack (MediaMTX recording + MoQ live bridge): `just ingest up`.
+mod ingest 'deploy/rtmp'
+
 # Run the demo by default.
 default:
     just demo
+
+# Start the whole live platform locally: MoQ relay + RTMP ingest.
+live:
+    bun install
+    bun run concurrently --kill-others --names relay,ingest --prefix-colors auto \
+    	"just relay" \
+    	"just ingest up"
 
 # Alias for `just demo`.
 dev:

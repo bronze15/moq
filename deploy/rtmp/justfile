@@ -1,0 +1,35 @@
+set fallback
+
+# Build the image and run the RTMP ingest stack (foreground).
+#
+# Local dev: auth is open (any stream key). In production use the systemd unit
+# with an .env that sets RTMP_AUTH_METHOD=http and RTMP_AUTH_URL.
+default: up
+
+# Build + start the ingest stack (MediaMTX recording + MoQ live bridge).
+up:
+    RTMP_AUTH_METHOD=internal docker compose up --build
+
+# Start in the background.
+up-detached:
+    RTMP_AUTH_METHOD=internal docker compose up --build -d
+
+# Start with the MinIO mirror sidecar.
+up-minio:
+    RTMP_AUTH_METHOD=internal docker compose --profile minio up --build
+
+# Stop and remove the stack.
+down:
+    docker compose down
+
+# Follow logs.
+logs:
+    docker compose logs -f
+
+# Rebuild the image only.
+build:
+    docker compose build
+
+# Create a local .env from the example (does not overwrite an existing one).
+setup:
+    cp -n .env.example .env
