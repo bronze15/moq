@@ -1,0 +1,35 @@
+[package]
+name = "moq-stats"
+description = "Live stats dashboard for moq-relay"
+authors = ["Luke Curley <kixelated@gmail.com>"]
+repository = "https://github.com/moq-dev/moq"
+license = "MIT OR Apache-2.0"
+keywords = ["moq", "stats", "dashboard", "metrics", "live"]
+categories = ["multimedia", "network-programming", "web-programming"]
+
+version = "0.0.1"
+edition = "2024"
+rust-version.workspace = true
+
+[[bin]]
+name = "moq-stats"
+path = "src/main.rs"
+
+[features]
+default = ["quinn", "websocket"]
+quinn = ["moq-native/quinn"]
+websocket = ["moq-native/websocket"]
+
+[dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+axum = "0.8"
+axum-server = "0.8"
+clap = { version = "4", features = ["derive"] }
+moq-native = { workspace = true, default-features = false, features = ["aws-lc-rs"] }
+moq-net = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+tokio = { workspace = true, features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+url = "2"

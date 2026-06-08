@@ -3959,6 +3959,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "moq-stats"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "clap",
+ "moq-native",
+ "moq-net",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "moq-token"
 version = "0.6.0"
 dependencies = [

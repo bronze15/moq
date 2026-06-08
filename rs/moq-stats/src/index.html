@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="es">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>MoQ Stats</title>
+		<style>
+			:root {
+				color-scheme: dark;
+				--bg: #0e1116;
+				--card: #171b22;
+				--border: #272d38;
+				--text: #e6e9ef;
+				--muted: #8b94a3;
+				--accent: #4ade80;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				font-family:
+					system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+				background: var(--bg);
+				color: var(--text);
+				padding: 24px;
+			}
+			header {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 12px;
+				margin-bottom: 20px;
+			}
+			h1 {
+				font-size: 20px;
+				margin: 0;
+			}
+			#updated {
+				color: var(--muted);
+				font-size: 13px;
+			}
+			.cards {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+				gap: 14px;
+				margin-bottom: 24px;
+			}
+			.card {
+				background: var(--card);
+				border: 1px solid var(--border);
+				border-radius: 12px;
+				padding: 18px 20px;
+			}
+			.card .label {
+				color: var(--muted);
+				font-size: 13px;
+				text-transform: uppercase;
+				letter-spacing: 0.04em;
+			}
+			.card .value {
+				font-size: 34px;
+				font-weight: 700;
+				margin-top: 6px;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				background: var(--card);
+				border: 1px solid var(--border);
+				border-radius: 12px;
+				overflow: hidden;
+			}
+			th,
+			td {
+				text-align: left;
+				padding: 12px 16px;
+				border-bottom: 1px solid var(--border);
+			}
+			th {
+				color: var(--muted);
+				font-size: 12px;
+				text-transform: uppercase;
+				letter-spacing: 0.04em;
+			}
+			tr:last-child td {
+				border-bottom: none;
+			}
+			td.viewers {
+				text-align: right;
+				font-variant-numeric: tabular-nums;
+			}
+			.dot {
+				display: inline-block;
+				width: 8px;
+				height: 8px;
+				border-radius: 50%;
+				margin-right: 8px;
+				background: #555;
+			}
+			.dot.live {
+				background: var(--accent);
+				box-shadow: 0 0 8px var(--accent);
+			}
+			.empty {
+				color: var(--muted);
+				text-align: center;
+				padding: 28px;
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<h1>MoQ Stats</h1>
+			<span id="updated">conectando...</span>
+		</header>
+
+		<div class="cards">
+			<div class="card">
+				<div class="label">Conectados</div>
+				<div class="value" id="connected">-</div>
+			</div>
+			<div class="card">
+				<div class="label">En vivo</div>
+				<div class="value" id="live">-</div>
+			</div>
+		</div>
+
+		<table>
+			<thead>
+				<tr>
+					<th>Stream</th>
+					<th style="text-align: right">Espectadores</th>
+				</tr>
+			</thead>
+			<tbody id="streams">
+				<tr>
+					<td class="empty" colspan="2">Sin streams</td>
+				</tr>
+			</tbody>
+		</table>
+
+		<script>
+			const fmt = (n) => n.toLocaleString("es");
+
+			async function refresh() {
+				try {
+					const res = await fetch("/api/stats");
+					if (!res.ok) throw new Error(res.status);
+					const data = await res.json();
+
+					document.getElementById("connected").textContent = fmt(
+						data.connected,
+					);
+					document.getElementById("live").textContent = fmt(
+						data.live_streams,
+					);
+
+					const tbody = document.getElementById("streams");
+					if (!data.streams.length) {
+						tbody.innerHTML =
+							'<tr><td class="empty" colspan="2">Sin streams</td></tr>';
+					} else {
+						tbody.innerHTML = data.streams
+							.sort((a, b) => b.viewers - a.viewers)
+							.map(
+								(s) =>
+									`<tr><td><span class="dot ${s.live ? "live" : ""}"></span>${escapeHtml(s.id)}</td>` +
+									`<td class="viewers">${fmt(s.viewers)}</td></tr>`,
+							)
+							.join("");
+					}
+
+					document.getElementById("updated").textContent =
+						"actualizado " + new Date().toLocaleTimeString("es");
+				} catch (err) {
+					document.getElementById("updated").textContent =
+						"sin conexion (" + err + ")";
+				}
+			}
+
+			function escapeHtml(s) {
+				const d = document.createElement("div");
+				d.textContent = s;
+				return d.innerHTML;
+			}
+
+			refresh();
+			setInterval(refresh, 2000);
+		</script>
+	</body>
+</html>

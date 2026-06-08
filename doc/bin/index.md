@@ -29,6 +29,12 @@ Another tool does the encoding (ex. ffmpeg), making it easy to pipe any media in
 ffmpeg -f avfoundation -i "0" -f mp4 - | moq-cli publish https://relay.example.com my-stream
 ```
 
+## [moq-stats](/bin/stats)
+
+A live stats dashboard for a relay: connected sessions, viewers per stream, and
+who is currently broadcasting. Reads the relay's `.stats` broadcast and serves an
+HTML page plus a JSON API.
+
 ## [OBS Plugin](/bin/obs)
 
 Real-time latency with the familiar OBS interface.
