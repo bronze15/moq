@@ -1,0 +1,43 @@
+name: moq-rtmp-ingest
+
+services:
+  # RTMP ingest + automatic recording + bridge to MoQ.
+  ingest:
+    build:
+      context: ../.. # repo root
+      dockerfile: deploy/rtmp/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "1935:1935" # RTMP publish endpoint (OBS / phones / ffmpeg)
+      - "9997:9997" # HTTP API (lock down or drop in production)
+    environment:
+      # Your MoQ relay. The bridge publishes each stream here as "<stream-key>.hang".
+      MOQ_URL: ${MOQ_URL:-http://host.docker.internal:4443/anon}
+    volumes:
+      - ./recordings:/recordings
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # reach a relay running on the host
+
+  # Optional: mirror recordings to MinIO as they're written.
+  # Enable with:  docker compose --profile minio up
+  minio-sync:
+    image: minio/mc:latest
+    restart: unless-stopped
+    depends_on: [ingest]
+    volumes:
+      - ./recordings:/recordings:ro
+    environment:
+      MINIO_URL: ${MINIO_URL:-http://host.docker.internal:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-recordings}
+    # `$$` defers expansion to the container shell (not compose).
+    entrypoint: >
+      sh -c '
+      mc alias set store "$$MINIO_URL" "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" &&
+      mc mb -p "store/$$MINIO_BUCKET" || true;
+      mc mirror --watch --overwrite /recordings "store/$$MINIO_BUCKET"
+      '
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles: ["minio"]
