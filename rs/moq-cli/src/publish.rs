@@ -33,11 +33,23 @@ impl PublishDecoder {
 			Self::Hls(_) => unreachable!(),
 		}
 	}
+
+	/// Finish all media tracks when the input ends, so subscribers see a clean
+	/// end-of-track instead of a dropped connection.
+	fn finish(&mut self) -> anyhow::Result<()> {
+		match self {
+			Self::Avc3(d) => d.finish(),
+			Self::Fmp4(d) => d.finish(),
+			Self::Ts(d) => d.finish(),
+			Self::Hls(_) => Ok(()), // the HLS importer finishes its own tracks when it ends
+		}
+	}
 }
 
 pub struct Publish {
 	decoder: PublishDecoder,
 	broadcast: moq_net::BroadcastProducer,
+	catalog: moq_mux::catalog::hang::Producer,
 }
 
 impl Publish {
@@ -65,7 +77,11 @@ impl Publish {
 			}
 		};
 
-		Ok(Self { decoder, broadcast })
+		Ok(Self {
+			decoder,
+			broadcast,
+			catalog,
+		})
 	}
 
 	pub fn consume(&self) -> moq_net::BroadcastConsumer {
@@ -75,7 +91,7 @@ impl Publish {
 	pub async fn run(mut self) -> anyhow::Result<()> {
 		if let PublishDecoder::Hls(decoder) = &mut self.decoder {
 			decoder.init().await?;
-			decoder.run().await
+			decoder.run().await?;
 		} else {
 			let mut stdin = tokio::io::stdin();
 			let mut buffer = bytes::BytesMut::new();
@@ -83,10 +99,27 @@ impl Publish {
 			loop {
 				let n = tokio::io::AsyncReadExt::read_buf(&mut stdin, &mut buffer).await?;
 				if n == 0 {
-					return Ok(());
+					break;
 				}
 				self.decoder.decode_buf(&mut buffer)?;
 			}
 		}
+
+		// Input ended: finish the tracks and the catalog cleanly so subscribers
+		// (e.g. recorders) observe an end-of-broadcast and finalize, instead of
+		// seeing the connection drop or hanging.
+		if let Err(err) = self.decoder.finish() {
+			tracing::warn!(%err, "error finishing tracks at end of input");
+		}
+		if let Err(err) = self.catalog.finish() {
+			tracing::warn!(%err, "error finishing catalog at end of input");
+		}
+
+		// Hold the session open briefly so the finish actually flushes to the
+		// relay over QUIC before we drop the connection; otherwise subscribers
+		// see a reset instead of a clean end-of-broadcast.
+		tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+		Ok(())
 	}
 }

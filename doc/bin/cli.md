@@ -176,6 +176,31 @@ are ignored when it is set. Short segments upload to object storage faster and
 let players start sooner, which is convenient for archiving or serving
 on-demand.
 
+## Auto-recording every live broadcast
+
+`record` watches the relay and, the moment any broadcast goes live, starts
+recording it to HLS automatically. No need to name streams or run a command per
+broadcast:
+
+```bash
+moq-cli record --url https://relay.example.com --prefix live/ --dir ./recordings
+```
+
+Each broadcast lands in `./recordings/<broadcast>/` (`init.mp4` +
+`seg_NNNNN.m4s` + `index.m3u8`). A recording finalizes to a VOD playlist
+(`#EXT-X-ENDLIST`) the moment its broadcast ends, so playlists never hang open.
+
+- `--prefix <p>` records only broadcasts under `p` (e.g. `live/`); empty records
+  everything announced.
+- `--chunk-duration` / `--catalog` / `--max-latency` work as for `subscribe`.
+- `--idle-timeout <dur>` (default `30s`) finalizes a recording if no media
+  arrives for that long, a backstop for a publisher that crashes without a clean
+  disconnect.
+
+A clean publisher disconnect (the broadcaster stops) is detected immediately and
+the recording finalizes within ~1s with no lost tail. The idle timeout only
+applies to abrupt crashes.
+
 ## Authentication
 
 Pass a JWT token via the URL:
